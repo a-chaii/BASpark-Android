@@ -31,8 +31,21 @@ jobs:
         with:
           packages: 'platforms;android-35 build-tools;35.0.0'
 
+      - name: Decode keystore
+        run: |
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > android/release.keystore
+            echo "已载入固定签名 keystore"
+          else
+            echo "没有配置 KEYSTORE_BASE64，本次使用临时 debug 签名"
+          fi
+
       - name: Build APK
         working-directory: android
+        env:
+          BASPARK_KEYSTORE: release.keystore
+          BASPARK_KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS || 'baspark' }}
+          BASPARK_KEY_ALIAS: ${{ secrets.KEYSTORE_ALIAS || 'baspark' }}
         run: |
           chmod +x build.sh
           bash build.sh

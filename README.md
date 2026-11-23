@@ -50,7 +50,9 @@ window.externalUpdateColor(...)
 ANDROID_HOME=/path/to/android-sdk bash android/build.sh
 ```
 
-需要 build-tools（36 测试过）、platform android-35、JDK 17。产物在 `android/out/BASparkMobile.apk`，用脚本里自动生成的 debug keystore 签的名。
+需要 build-tools（36 测试过）、platform android-35、JDK 17。产物在 `android/out/BASparkMobile.apk`。
+
+本地编的话签名是现场生成的临时 key，装过旧版就得先卸载。CI 那边从仓库 Secret 里读固定的 keystore，所以 Actions 下的包能直接覆盖安装——想要同样的效果，把 keystore 的 base64 放进环境变量 `BASPARK_KEYSTORE`（base64 内容存在 `KEYSTORE_BASE64` secret 里，构建前解到 `android/release.keystore`）。
 
 包名 `com.miu.baspark`，minSdk 26，targetSdk 35。
 

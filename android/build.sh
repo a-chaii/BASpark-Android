@@ -69,12 +69,25 @@ PY
 
 echo "== align + sign =="
 "$ZIPALIGN" -f 4 out/app.apk out/aligned.apk || exit 1
-if [ ! -f debug.keystore ]; then
-    keytool -genkeypair -keystore debug.keystore -alias baspark \
-        -storepass baspark -keypass baspark -keyalg RSA -keysize 2048 \
-        -validity 10000 -dname "CN=BASpark Android" >/dev/null 2>&1
+# 签名：CI 里从 secret 解出固定 keystore，本地没有就用临时 debug key
+KEYSTORE="${BASPARK_KEYSTORE:-release.keystore}"
+KS_PASS="${BASPARK_KEYSTORE_PASS:-baspark}"
+KS_ALIAS="${BASPARK_KEY_ALIAS:-baspark}"
+
+if [ -f "$KEYSTORE" ]; then
+    echo "签名: $KEYSTORE (固定签名，可覆盖安装)"
+else
+    echo "签名: 未找到 $KEYSTORE，回退临时 debug keystore（每个构建都不同，不能覆盖安装）"
+    KEYSTORE="debug.keystore"
+    if [ ! -f "$KEYSTORE" ]; then
+        keytool -genkeypair -keystore "$KEYSTORE" -alias "$KS_ALIAS" \
+            -storepass "$KS_PASS" -keypass "$KS_PASS" -keyalg RSA -keysize 2048 \
+            -validity 10000 -dname "CN=BASpark Android" >/dev/null 2>&1
+    fi
 fi
-"$BT/apksigner" sign --ks debug.keystore --ks-pass pass:baspark --key-pass pass:baspark \
+
+"$BT/apksigner" sign --ks "$KEYSTORE" \
+    --ks-pass "pass:$KS_PASS" --key-pass "pass:$KS_PASS" --ks-key-alias "$KS_ALIAS" \
     --out out/BASparkMobile.apk out/aligned.apk || exit 1
 
 ls -lh out/BASparkMobile.apk

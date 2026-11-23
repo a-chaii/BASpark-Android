@@ -444,3 +444,4 @@ android/out/
 android/debug.keystore
 android/*.keystore
 android/out/gen/
+android/release.keystore
