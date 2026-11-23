@@ -18,6 +18,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Display;
 import android.view.Gravity;
@@ -50,6 +51,10 @@ public class OverlayService extends Service implements TouchReader.Sink {
     private volatile boolean pageReady = false;
     private static volatile OverlayService sRef;
     private boolean suppressed = false;
+
+    // 悬浮窗的真实边界：状态栏/导航栏会把 MATCH_PARENT 挤小，百分比必须按这个算
+    private int dispW, dispH;
+    private int webLeft, webTop, webW, webH;
 
     private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
         @Override
@@ -177,6 +182,7 @@ public class OverlayService extends Service implements TouchReader.Sink {
     private void onDisplayChanged() {
         int rot = currentRotation();
         if (reader != null) reader.setRotation(rot);
+        ui.postDelayed(this::updateMetrics, 400);
         if (web != null) {
             web.requestLayout();
             web.postDelayed(() -> eval("window.dispatchEvent(new Event('resize'));"), 120);
@@ -214,6 +220,7 @@ public class OverlayService extends Service implements TouchReader.Sink {
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                 | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED;
 
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
@@ -225,6 +232,12 @@ public class OverlayService extends Service implements TouchReader.Sink {
                 flags,
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
+        if (Build.VERSION.SDK_INT >= 28) {
+            lp.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        }
+
+        web.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateMetrics());
 
         try {
             wm.addView(web, lp);
@@ -232,6 +245,44 @@ public class OverlayService extends Service implements TouchReader.Sink {
             Log.e(TAG, "addView failed", e);
             stopSelf();
         }
+        ui.postDelayed(this::updateMetrics, 400);
+    }
+
+    /** 重新量一次：屏幕真实尺寸 + 悬浮窗在屏幕上的位置/尺寸 */
+    private void updateMetrics() {
+        try {
+            DisplayMetrics dm = new DisplayMetrics();
+            wm.getDefaultDisplay().getRealMetrics(dm);
+            dispW = dm.widthPixels;
+            dispH = dm.heightPixels;
+            if (web != null) {
+                int[] loc = new int[2];
+                web.getLocationOnScreen(loc);
+                webLeft = loc[0];
+                webTop = loc[1];
+                webW = web.getWidth();
+                webH = web.getHeight();
+            }
+            Log.i(TAG, "metrics screen=" + dispW + "x" + dispH
+                    + " overlay=" + webW + "x" + webH + " @" + webLeft + "," + webTop);
+        } catch (Exception e) {
+            Log.w(TAG, "updateMetrics failed", e);
+        }
+    }
+
+    /** 屏幕百分比 → 悬浮窗内百分比 */
+    private float toWebX(float p) {
+        if (webW <= 0 || dispW <= 0) return p;
+        return clamp01((p * dispW - webLeft) / (float) webW);
+    }
+
+    private float toWebY(float p) {
+        if (webH <= 0 || dispH <= 0) return p;
+        return clamp01((p * dispH - webTop) / (float) webH);
+    }
+
+    private static float clamp01(float v) {
+        return v < 0f ? 0f : (v > 1f ? 1f : v);
     }
 
     // ---------------- 通知 ----------------
@@ -314,13 +365,13 @@ public class OverlayService extends Service implements TouchReader.Sink {
     @Override
     public void onDown(float px, float py) {
         if (suppressed) return;
-        eval("window.externalBoom(" + fmt(px) + "," + fmt(py) + ");");
+        eval("window.externalBoom(" + fmt(toWebX(px)) + "," + fmt(toWebY(py)) + ");");
     }
 
     @Override
     public void onMove(float px, float py) {
         if (suppressed) return;
-        eval("window.externalMove(" + fmt(px) + "," + fmt(py) + ");");
+        eval("window.externalMove(" + fmt(toWebX(px)) + "," + fmt(toWebY(py)) + ");");
     }
 
     @Override

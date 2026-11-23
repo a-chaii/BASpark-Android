@@ -42,7 +42,7 @@ echo "== aapt2 link =="
     -R out/res.zip -A assets --auto-add-overlay \
     --java out/gen \
     --min-sdk-version 26 --target-sdk-version 35 \
-    --version-code 4 --version-name 0.4 || exit 1
+    --version-code 5 --version-name 0.5 || exit 1
 
 echo "== javac =="
 javac -nowarn -encoding UTF-8 --release 11 -cp "$PLATFORM_JAR" -d out/classes \
