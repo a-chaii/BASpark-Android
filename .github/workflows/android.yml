@@ -1,0 +1,58 @@
+name: Android Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'android/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-35 build-tools;35.0.0'
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x build.sh
+          bash build.sh
+
+      - name: Show output
+        working-directory: android
+        run: |
+          ls -lh out/BASparkMobile.apk
+          sha256sum out/BASparkMobile.apk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BASparkMobile-apk
+          path: android/out/BASparkMobile.apk
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/out/BASparkMobile.apk
+          generate_release_notes: true

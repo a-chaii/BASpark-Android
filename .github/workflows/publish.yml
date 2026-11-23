@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   build:
+    if: github.repository_owner == 'DoomVoss'
     runs-on: windows-latest
 
     steps:
