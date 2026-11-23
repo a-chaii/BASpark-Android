@@ -438,3 +438,9 @@ Thumbs.db
 desktop.ini
 
 config.json
+
+# --- Android port ---
+android/out/
+android/debug.keystore
+android/*.keystore
+android/out/gen/

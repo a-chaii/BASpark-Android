@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BASpark</string>
+    <string name="acc_desc">不使用 root 时，通过点击事件的位置来触发点击特效（降级方案，只能获取控件级坐标）。</string>
+</resources>
