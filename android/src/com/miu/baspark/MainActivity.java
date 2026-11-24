@@ -47,6 +47,7 @@ public class MainActivity extends Activity {
     private int cOnSurface, cOnSurfaceVariant, cOutline, cOutlineVariant;
     private int cStatusCard, cOnStatusCard;
     private LinearLayout wlList;
+    private LinearLayout rendererRow;
     private TextView fgText;
 
     private float dp;
@@ -75,6 +76,7 @@ public class MainActivity extends Activity {
         buildStatusCard(root);
         buildActionButtons(root);
         buildPermissionCard(root);
+        buildRendererCard(root);
         buildInputCard(root);
         buildWhitelistCard(root);
         buildAppearanceCard(root);
@@ -176,6 +178,51 @@ public class MainActivity extends Activity {
 
         rowItem(card, "Root 权限", "读取 /dev/input 触摸事件", "检测", false,
                 v -> checkRoot());
+    }
+
+    private void buildRendererCard(LinearLayout root) {
+        sectionLabel(root, "渲染实现");
+        LinearLayout card = card(root, cSurfaceContainer, 24);
+
+        TextView tip = new TextView(this);
+        tip.setText("WebView 用的是上游原版 Canvas 引擎，保真度最高；"
+                + "原生 View 是同一套数学的 Java 重写，省内存、帧率更稳，个别细节做了简化。");
+        tip.setTextSize(12);
+        tip.setTextColor(cOnSurfaceVariant);
+        tip.setLineSpacing(dp(2), 1f);
+        tip.setPadding(0, 0, 0, dp(12));
+        card.addView(tip);
+
+        rendererRow = new LinearLayout(this);
+        rendererRow.setOrientation(LinearLayout.HORIZONTAL);
+        card.addView(rendererRow);
+        rebuildRendererButtons();
+    }
+
+    private void rebuildRendererButtons() {
+        if (rendererRow == null) return;
+        rendererRow.removeAllViews();
+        int cur = Config.renderer(this);
+
+        TextView web = button("WebView", cur == 0 ? BTN_FILLED : BTN_OUTLINED);
+        web.setOnClickListener(v -> setRenderer(0));
+        rendererRow.addView(web, weightParams(1, 0, 0, dp(6)));
+
+        TextView nat = button("原生 View", cur == 1 ? BTN_FILLED : BTN_OUTLINED);
+        nat.setOnClickListener(v -> setRenderer(1));
+        rendererRow.addView(nat, weightParams(1, dp(6), 0, dp(6)));
+    }
+
+    private void setRenderer(int value) {
+        if (Config.renderer(this) == value) return;
+        Config.setInt(this, "renderer", value);
+        rebuildRendererButtons();
+        toast("已切换到" + (value == 1 ? "原生 View" : "WebView") + "，正在重启特效…");
+        if (OverlayService.RUNNING) {
+            stopService(new Intent(this, OverlayService.class));
+            ui.postDelayed(() -> startForegroundService(
+                    new Intent(this, OverlayService.class)), 700);
+        }
     }
 
     private void buildInputCard(LinearLayout root) {

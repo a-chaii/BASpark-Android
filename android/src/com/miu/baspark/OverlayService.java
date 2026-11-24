@@ -39,6 +39,8 @@ public class OverlayService extends Service implements TouchReader.Sink {
 
     public static final String ACTION_UPDATE = "com.miu.baspark.UPDATE";
     public static final String ACTION_STOP = "com.miu.baspark.STOP";
+    /** 调试用：从 adb 或 shell 发一个中心爆裂，验证绘制链路 */
+    public static final String ACTION_TEST = "com.miu.baspark.TEST";
 
     public static volatile boolean RUNNING = false;
     public static volatile float REAL_FPS = 0f;
@@ -46,6 +48,8 @@ public class OverlayService extends Service implements TouchReader.Sink {
 
     private WindowManager wm;
     private WebView web;
+    private NativeSparkView nativeView;
+    private View overlayView;
     private TouchReader reader;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private volatile boolean pageReady = false;
@@ -61,9 +65,9 @@ public class OverlayService extends Service implements TouchReader.Sink {
         public void onReceive(Context context, Intent intent) {
             String a = intent.getAction();
             if (Intent.ACTION_SCREEN_OFF.equals(a)) {
-                eval("window.setRenderingPaused(true);");
+                setRenderingPaused(true);
             } else if (Intent.ACTION_SCREEN_ON.equals(a)) {
-                eval("window.setRenderingPaused(false);");
+                setRenderingPaused(false);
             } else if (Intent.ACTION_CONFIGURATION_CHANGED.equals(a)) {
                 onDisplayChanged();
             }
@@ -80,6 +84,8 @@ public class OverlayService extends Service implements TouchReader.Sink {
         super.onCreate();
         RUNNING = true;
         sRef = this;
+        DLog.init(getApplicationContext());
+        DLog.i(TAG, "service onCreate");
         startForegroundCompat();
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         createOverlay();
@@ -100,7 +106,7 @@ public class OverlayService extends Service implements TouchReader.Sink {
 
         ui.postDelayed(this::afterBoot, 800);
         ui.postDelayed(this::startFpsPolling, 1200);
-        Log.i(TAG, "overlay service started, rotation=" + currentRotation());
+        DLog.i(TAG, "overlay service started, rotation=" + currentRotation());
     }
 
     @Override
@@ -110,6 +116,12 @@ public class OverlayService extends Service implements TouchReader.Sink {
             if (ACTION_STOP.equals(action)) {
                 stopSelf();
                 return START_NOT_STICKY;
+            }
+            if (ACTION_TEST.equals(action)) {
+                onDown(0.5f, 0.5f);
+                ui.postDelayed(this::onUp, 200);
+                ui.postDelayed(() -> DLog.i(TAG, "test burst fps=" + REAL_FPS), 1600);
+                return START_STICKY;
             }
             if (ACTION_UPDATE.equals(action)) {
                 applySettings();
@@ -128,6 +140,12 @@ public class OverlayService extends Service implements TouchReader.Sink {
 
     private void applySettings() {
         if (reader != null) reader.setPrimaryOnly(Config.multitouchOpt(this));
+        if (nativeView != null) {
+            nativeView.updateSettings(Config.scale(this), Config.opacity(this),
+                    Config.trailSpeed(this), Config.clickSpeed(this),
+                    Config.fps(this), Config.colorRgb(this), Config.alwaysTrail(this));
+            return;
+        }
         if (!pageReady) return;
         boolean alwaysTrail = Config.alwaysTrail(this);
         // 上游逻辑里常驻拖尾只在 mouse 模式下生效，这里顺着它的判定走
@@ -156,6 +174,10 @@ public class OverlayService extends Service implements TouchReader.Sink {
     }
 
     private void readFps() {
+        if (nativeView != null) {
+            REAL_FPS = nativeView.getFps();
+            return;
+        }
         if (web == null || !pageReady) return;
         web.evaluateJavascript("window.__basRealFps || 0", value -> {
             if (value == null) return;
@@ -183,14 +205,67 @@ public class OverlayService extends Service implements TouchReader.Sink {
         int rot = currentRotation();
         if (reader != null) reader.setRotation(rot);
         ui.postDelayed(this::updateMetrics, 400);
-        if (web != null) {
-            web.requestLayout();
+        if (overlayView != null) {
+            overlayView.requestLayout();
             web.postDelayed(() -> eval("window.dispatchEvent(new Event('resize'));"), 120);
         }
         Log.i(TAG, "display changed, rotation=" + rot);
     }
 
     private void createOverlay() {
+        if (Config.renderer(this) == 1) {
+            createNativeOverlay();
+        } else {
+            createWebOverlay();
+        }
+    }
+
+    private WindowManager.LayoutParams overlayParams() {
+        int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED;
+        WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                Build.VERSION.SDK_INT >= 26
+                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        : WindowManager.LayoutParams.TYPE_PHONE,
+                flags,
+                PixelFormat.TRANSLUCENT);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        if (Build.VERSION.SDK_INT >= 28) {
+            lp.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        }
+        return lp;
+    }
+
+    private void createNativeOverlay() {
+        nativeView = new NativeSparkView(getApplicationContext());
+        overlayView = nativeView;
+        nativeView.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            updateMetrics();
+            nativeView.postInvalidateOnAnimation();
+        });
+        try {
+            wm.addView(nativeView, overlayParams());
+        } catch (Exception e) {
+            Log.e(TAG, "addView(native) failed", e);
+            stopSelf();
+            return;
+        }
+        nativeView.updateSettings(Config.scale(this), Config.opacity(this),
+                Config.trailSpeed(this), Config.clickSpeed(this),
+                Config.fps(this), Config.colorRgb(this), Config.alwaysTrail(this));
+        DLog.i(TAG, "native overlay attached");
+        ui.postDelayed(this::updateMetrics, 400);
+        ui.postDelayed(() -> { if (nativeView != null) nativeView.postInvalidateOnAnimation(); }, 800);
+    }
+
+    private void createWebOverlay() {
         web = new WebView(getApplicationContext());
         web.setBackgroundColor(Color.TRANSPARENT);
         web.setFocusable(false);
@@ -240,6 +315,7 @@ public class OverlayService extends Service implements TouchReader.Sink {
         web.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateMetrics());
 
         try {
+            overlayView = web;
             wm.addView(web, lp);
         } catch (Exception e) {
             Log.e(TAG, "addView failed", e);
@@ -255,15 +331,15 @@ public class OverlayService extends Service implements TouchReader.Sink {
             wm.getDefaultDisplay().getRealMetrics(dm);
             dispW = dm.widthPixels;
             dispH = dm.heightPixels;
-            if (web != null) {
+            if (overlayView != null) {
                 int[] loc = new int[2];
-                web.getLocationOnScreen(loc);
+                overlayView.getLocationOnScreen(loc);
                 webLeft = loc[0];
                 webTop = loc[1];
-                webW = web.getWidth();
-                webH = web.getHeight();
+                webW = overlayView.getWidth();
+                webH = overlayView.getHeight();
             }
-            Log.i(TAG, "metrics screen=" + dispW + "x" + dispH
+            DLog.i(TAG, "metrics screen=" + dispW + "x" + dispH
                     + " overlay=" + webW + "x" + webH + " @" + webLeft + "," + webTop);
         } catch (Exception e) {
             Log.w(TAG, "updateMetrics failed", e);
@@ -352,31 +428,59 @@ public class OverlayService extends Service implements TouchReader.Sink {
             }
             if (allowed && suppressed) {
                 suppressed = false;
-                eval("window.setRenderingPaused(false);");
+                setRenderingPaused(false);
             } else if (!allowed && !suppressed) {
                 suppressed = true;
-                eval("window.setRenderingPaused(true);");
+                setRenderingPaused(true);
             }
         } catch (Exception ignored) {
         }
         ui.postDelayed(this::whitelistTick, 900);
     }
 
+    private void setRenderingPaused(boolean paused) {
+        if (nativeView != null) {
+            nativeView.setPaused(paused);
+        } else {
+            eval("window.setRenderingPaused(" + paused + ");");
+        }
+    }
+
+    private float toViewX(float p) {
+        return toWebX(p) * (webW > 0 ? webW : getResources().getDisplayMetrics().widthPixels);
+    }
+
+    private float toViewY(float p) {
+        return toWebY(p) * (webH > 0 ? webH : getResources().getDisplayMetrics().heightPixels);
+    }
+
     @Override
     public void onDown(float px, float py) {
         if (suppressed) return;
+        if (nativeView != null) {
+            nativeView.onDown(toViewX(px), toViewY(py));
+            return;
+        }
         eval("window.externalBoom(" + fmt(toWebX(px)) + "," + fmt(toWebY(py)) + ");");
     }
 
     @Override
     public void onMove(float px, float py) {
         if (suppressed) return;
+        if (nativeView != null) {
+            nativeView.onMove(toViewX(px), toViewY(py));
+            return;
+        }
         eval("window.externalMove(" + fmt(toWebX(px)) + "," + fmt(toWebY(py)) + ");");
     }
 
     @Override
     public void onUp() {
         if (suppressed) return;
+        if (nativeView != null) {
+            nativeView.onUp();
+            return;
+        }
         eval("window.externalUp();");
     }
 
@@ -415,16 +519,20 @@ public class OverlayService extends Service implements TouchReader.Sink {
             reader.stop();
             reader = null;
         }
-        if (web != null) {
+        if (overlayView != null) {
             try {
-                wm.removeView(web);
+                wm.removeView(overlayView);
             } catch (Exception ignored) {
             }
-            try {
-                web.destroy();
-            } catch (Exception ignored) {
+            if (web != null) {
+                try {
+                    web.destroy();
+                } catch (Exception ignored) {
+                }
             }
             web = null;
+            nativeView = null;
+            overlayView = null;
         }
         stopForeground(true);
         Log.i(TAG, "overlay service destroyed");

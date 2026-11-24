@@ -12,6 +12,8 @@ android/
 ├── res/                         图标、字符串、无障碍配置
 └── src/com/miu/baspark/
     ├── MainActivity.java        设置界面（M3 语义色 + 手写组件）
+    ├── NativeSparkView.java     原生 Canvas 粒子引擎（WebView 的等价重写）
+    ├── DLog.java                调试日志（logcat 刷得太快时写文件）
     ├── OverlayService.java      前台服务：透明 WebView 悬浮窗 + 设置注入 + 帧率限制
     ├── TouchReader.java         root 读 /dev/input，解析触摸事件并换算百分比
     ├── BasAccessibilityService.java  免 root 降级：控件级点击坐标
@@ -48,6 +50,15 @@ timeval 16 字节 + type 2 + code 2 + value 4）。解析出 `ABS_MT_SLOT / POSI
 **触摸（无障碍）**
 监听 `TYPE_VIEW_CLICKED`，取 `AccessibilityNodeInfo.getBoundsInScreen()` 的中心点。
 只有"点"，没有"拖"，所以没有拖尾。
+
+## 两套渲染实现
+
+`Config.renderer` 决定用哪个：0 = WebView（默认，加载 assets/index.html），
+1 = NativeSparkView。两者对外都吃 0~1 的百分比坐标，切换时服务会重启。
+
+原生版是把 index.html 里的常量与公式搬过来：波环的 `RINGS_ANIM_CFG`、
+实心圆的 `FILLED_CIRCLE_CFG`、爆裂的 4 颗三角碎片、拖尾的三段辉光。
+简化点写在 NativeSparkView 的类注释里。
 
 ## 帧率限制
 

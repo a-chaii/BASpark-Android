@@ -61,6 +61,11 @@ public final class Config {
         return sp(c).getBoolean("always_trail", false);
     }
 
+    /** 渲染实现：0 = WebView（上游原版引擎），1 = 原生 View */
+    public static int renderer(Context c) {
+        return sp(c).getInt("renderer", 0);
+    }
+
     public static boolean autoStart(Context c) {
         return sp(c).getBoolean("autostart", false);
     }
