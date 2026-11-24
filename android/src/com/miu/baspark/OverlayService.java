@@ -143,7 +143,8 @@ public class OverlayService extends Service implements TouchReader.Sink {
         if (nativeView != null) {
             nativeView.updateSettings(Config.scale(this), Config.opacity(this),
                     Config.trailSpeed(this), Config.clickSpeed(this),
-                    Config.fps(this), Config.colorRgb(this), Config.alwaysTrail(this));
+                    Config.fps(this), Config.colorRgb(this), Config.alwaysTrail(this),
+                    Config.hdr(this), Config.hdrGain(this));
             return;
         }
         if (!pageReady) return;
@@ -234,8 +235,13 @@ public class OverlayService extends Service implements TouchReader.Sink {
                         ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                         : WindowManager.LayoutParams.TYPE_PHONE,
                 flags,
-                PixelFormat.TRANSLUCENT);
+                Config.hdr(this) && Build.VERSION.SDK_INT >= 26
+                        ? PixelFormat.RGBA_F16
+                        : PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
+        lp.alpha = 1f;
+        lp.windowAnimations = 0;
+        lp.setTitle("BASparkOverlay");
         if (Build.VERSION.SDK_INT >= 28) {
             lp.layoutInDisplayCutoutMode =
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
@@ -259,7 +265,8 @@ public class OverlayService extends Service implements TouchReader.Sink {
         }
         nativeView.updateSettings(Config.scale(this), Config.opacity(this),
                 Config.trailSpeed(this), Config.clickSpeed(this),
-                Config.fps(this), Config.colorRgb(this), Config.alwaysTrail(this));
+                Config.fps(this), Config.colorRgb(this), Config.alwaysTrail(this),
+                Config.hdr(this), Config.hdrGain(this));
         DLog.i(TAG, "native overlay attached");
         ui.postDelayed(this::updateMetrics, 400);
         ui.postDelayed(() -> { if (nativeView != null) nativeView.postInvalidateOnAnimation(); }, 800);
@@ -305,8 +312,13 @@ public class OverlayService extends Service implements TouchReader.Sink {
                         ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                         : WindowManager.LayoutParams.TYPE_PHONE,
                 flags,
-                PixelFormat.TRANSLUCENT);
+                Config.hdr(this) && Build.VERSION.SDK_INT >= 26
+                        ? PixelFormat.RGBA_F16
+                        : PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
+        lp.alpha = 1f;
+        lp.windowAnimations = 0;
+        lp.setTitle("BASparkOverlay");
         if (Build.VERSION.SDK_INT >= 28) {
             lp.layoutInDisplayCutoutMode =
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
@@ -458,7 +470,8 @@ public class OverlayService extends Service implements TouchReader.Sink {
     public void onDown(float px, float py) {
         if (suppressed) return;
         if (nativeView != null) {
-            nativeView.onDown(toViewX(px), toViewY(py));
+            final float vx = toViewX(px), vy = toViewY(py);
+            ui.post(() -> nativeView.onDown(vx, vy));
             return;
         }
         eval("window.externalBoom(" + fmt(toWebX(px)) + "," + fmt(toWebY(py)) + ");");
@@ -468,7 +481,8 @@ public class OverlayService extends Service implements TouchReader.Sink {
     public void onMove(float px, float py) {
         if (suppressed) return;
         if (nativeView != null) {
-            nativeView.onMove(toViewX(px), toViewY(py));
+            final float vx = toViewX(px), vy = toViewY(py);
+            ui.post(() -> nativeView.onMove(vx, vy));
             return;
         }
         eval("window.externalMove(" + fmt(toWebX(px)) + "," + fmt(toWebY(py)) + ");");
@@ -478,7 +492,7 @@ public class OverlayService extends Service implements TouchReader.Sink {
     public void onUp() {
         if (suppressed) return;
         if (nativeView != null) {
-            nativeView.onUp();
+            ui.post(() -> nativeView.onUp());
             return;
         }
         eval("window.externalUp();");

@@ -66,6 +66,21 @@ public final class Config {
         return sp(c).getInt("renderer", 0);
     }
 
+    /** 实验性 HDR 高光（仅原生渲染生效） */
+    public static boolean hdr(Context c) {
+        return sp(c).getBoolean("hdr", false);
+    }
+
+    /** HDR 高光倍率（0.3 ~ 3.0） */
+    public static float hdrGain(Context c) {
+        return sp(c).getFloat("hdr_gain", 1f);
+    }
+
+    /** 从最近任务卡片里隐藏 */
+    public static boolean hideRecents(Context c) {
+        return sp(c).getBoolean("hide_recents", false);
+    }
+
     public static boolean autoStart(Context c) {
         return sp(c).getBoolean("autostart", false);
     }

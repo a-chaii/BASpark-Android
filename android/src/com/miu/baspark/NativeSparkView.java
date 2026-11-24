@@ -5,7 +5,9 @@ import android.graphics.BlendMode;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.LinearGradient;
 import android.graphics.Path;
+import android.graphics.Shader;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
 import android.graphics.RectF;
@@ -49,6 +51,7 @@ public class NativeSparkView extends View {
     private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint sparkPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path sparkPath = new Path();
+    private Path trailPath;
     private final RectF arcRect = new RectF();
 
     private final float density;
@@ -70,6 +73,8 @@ public class NativeSparkView extends View {
     private boolean alwaysTrail = false;
     private int targetFps = 0;
     private boolean paused = false;
+    private boolean hdr = false;
+    private float hdrGain = 1f;
 
     private int colorR = 45, colorG = 175, colorB = 255;
     private float endR, endG, endB;
@@ -83,33 +88,58 @@ public class NativeSparkView extends View {
     private static final int MAX_TRAIL = 16;
     private static final String TAG = "BASparkNative";
     private boolean loggedFirstFrame = false;
+    private int drawCount = 0;
+    private final boolean debugRect;
 
     public NativeSparkView(Context context) {
+        this(context, safeBool(context, "native_plain", true),
+                safeBool(context, "native_debug_rect", false));
+    }
+
+    /** 供 helper 进程（systemContext，无 SharedPreferences）使用 */
+    public NativeSparkView(Context context, boolean plain, boolean debugRectFlag) {
         super(context);
         density = context.getResources().getDisplayMetrics().density;
-        setLayerType(LAYER_TYPE_HARDWARE, null);
+        debugRect = debugRectFlag;
+        DLog.i(TAG, "blend=" + (plain ? "SRC_OVER(plain)" : "PLUS"));
+        if (!plain) {
+            setLayerType(LAYER_TYPE_HARDWARE, null);
+        }
         fillPaint.setStyle(Paint.Style.FILL);
         strokePaint.setStyle(Paint.Style.STROKE);
         sparkPaint.setStyle(Paint.Style.FILL);
         // 上游是在缓冲层用 lighter 叠加，这里用 ADD
-        if (Build.VERSION.SDK_INT >= 29) {
+        if (!plain && Build.VERSION.SDK_INT >= 29) {
             fillPaint.setBlendMode(BlendMode.PLUS);
             strokePaint.setBlendMode(BlendMode.PLUS);
             sparkPaint.setBlendMode(BlendMode.PLUS);
-        } else {
+        } else if (!plain) {
             PorterDuffXfermode add = new PorterDuffXfermode(PorterDuff.Mode.ADD);
             fillPaint.setXfermode(add);
             strokePaint.setXfermode(add);
             sparkPaint.setXfermode(add);
         }
+        setBackgroundColor(Color.TRANSPARENT);
+        setWillNotDraw(false);
         setAlpha(1f);
         DLog.i(TAG, "view constructed, density=" + density);
+    }
+
+    private static boolean safeBool(Context c, String key, boolean def) {
+        try {
+            return Config.sp(c).getBoolean(key, def);
+        } catch (Throwable t) {
+            return def;
+        }
     }
 
     // ================= 对外接口 =================
 
     public void updateSettings(float scale, float opacity, float trailSpeed, float clickSpeed,
-                               int targetFps, String rgb, boolean alwaysTrail) {
+                               int targetFps, String rgb, boolean alwaysTrail, boolean hdr, float hdrGain) {
+        this.hdrGain = Math.max(0.3f, Math.min(3f, hdrGain));
+        this.hdr = hdr;
+        applyBlend();
         this.scale = Math.max(0.5f, Math.min(3f, scale));
         this.opacity = Math.max(0.1f, Math.min(1f, opacity));
         this.trailSpeed = Math.max(0.2f, Math.min(3f, trailSpeed));
@@ -129,6 +159,21 @@ public class NativeSparkView extends View {
         invalidate();
     }
 
+    /** HDR 模式用 PLUS 叠加 + 硬件层，普通模式用 SRC_OVER，保证老设备能看见 */
+    private void applyBlend() {
+        if (hdr && Build.VERSION.SDK_INT >= 26) {
+            setLayerType(LAYER_TYPE_HARDWARE, null);
+        }
+        PorterDuffXfermode add = new PorterDuffXfermode(PorterDuff.Mode.ADD);
+        for (Paint p : new Paint[]{fillPaint, strokePaint, sparkPaint}) {
+            if (Build.VERSION.SDK_INT >= 29) {
+                p.setBlendMode(hdr ? BlendMode.PLUS : BlendMode.SRC_OVER);
+            } else {
+                p.setXfermode(hdr ? add : null);
+            }
+        }
+    }
+
     public void setPaused(boolean paused) {
         this.paused = paused;
         if (paused) {
@@ -144,6 +189,7 @@ public class NativeSparkView extends View {
     }
 
     public void onDown(float x, float y) {
+        DLog.i(TAG, "onDown " + x + "," + y + " paused=" + paused);
         if (paused) return;
         isDown = true;
         lastX = x;
@@ -159,7 +205,8 @@ public class NativeSparkView extends View {
         if (hasLast) {
             float dx = x - lastX;
             float dy = y - lastY;
-            if (dx * dx + dy * dy > 4f) {
+            float minStep = 2f * density;
+            if (dx * dx + dy * dy > minStep * minStep) {
                 trail.add(new TrailPoint(x, y, 1f));
                 if (trail.size() > MAX_TRAIL) trail.remove(0);
                 // 拖尾偶尔甩出小碎片
@@ -169,11 +216,11 @@ public class NativeSparkView extends View {
                     Spark s = new Spark();
                     s.x = x + (float) Math.cos(a) * 10 * scale;
                     s.y = y + (float) Math.sin(a) * 10 * scale;
-                    s.vx = (float) Math.cos(a) * 1.3f * speedAdjust;
-                    s.vy = (float) Math.sin(a) * 1.3f * speedAdjust;
+                    s.vx = (float) Math.cos(a) * 1.3f * speedAdjust * density;
+                    s.vy = (float) Math.sin(a) * 1.3f * speedAdjust * density;
                     s.rot = random.nextFloat() * (float) Math.PI * 2;
                     s.rs = 0.16f;
-                    s.size = 9 * scale;
+                    s.size = 9 * scale * density;
                     s.alpha = 0.7f;
                     s.friction = 0.95f;
                     s.fromClick = false;
@@ -193,6 +240,8 @@ public class NativeSparkView extends View {
     }
 
     private void wake() {
+        DLog.i(TAG, "wake w=" + waves.size() + " s=" + sparks.size()
+                + " attached=" + isAttachedToWindow());
         if (!paused) {
             lastFrameMs = Math.max(lastFrameMs, SystemClock.uptimeMillis() - 16);
             invalidate();
@@ -303,6 +352,10 @@ public class NativeSparkView extends View {
     protected void onDraw(Canvas canvas) {
         long now = SystemClock.uptimeMillis();
 
+        if (debugRect) {
+            canvas.drawColor(Color.MAGENTA);
+            return;
+        }
         if (paused) {
             canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
             return;
@@ -324,7 +377,13 @@ public class NativeSparkView extends View {
 
         if (!loggedFirstFrame) {
             loggedFirstFrame = true;
-            DLog.i(TAG, "first frame " + getWidth() + "x" + getHeight());
+            DLog.i(TAG, "first frame " + getWidth() + "x" + getHeight()
+                    + " shown=" + isShown() + " vis=" + getVisibility());
+        }
+        drawCount++;
+        if (drawCount <= 8 || drawCount % 30 == 0) {
+            DLog.i(TAG, "draw #" + drawCount + " w=" + waves.size()
+                    + " s=" + sparks.size() + " t=" + trail.size());
         }
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
         update(dt);
@@ -353,49 +412,73 @@ public class NativeSparkView extends View {
         int n = trail.size();
         if (n == 0) return;
 
-        // 上游把“当前指针位置”也当成尾迹的一个端点
-        float[] xs = new float[n + 1];
-        float[] ys = new float[n + 1];
-        float[] ls = new float[n + 1];
-        for (int i = 0; i < n; i++) {
-            xs[i] = trail.get(i).x;
-            ys[i] = trail.get(i).y;
-            ls[i] = trail.get(i).life;
-        }
-        if (hasLast) {
-            xs[n] = lastX;
-            ys[n] = lastY;
-            ls[n] = 1f;
-        } else {
-            n--;
-        }
-        if (n < 1) return;
-
-        // 只有一个点且几乎没动：画个小圆
-        if (n == 1) {
-            float fade = Math.max(0, ls[0]);
-            fillPaint.setColor(blend(ls[0]));
+        // 把“当前指针位置”当尾迹端点（和上游一致）
+        int count = hasLast ? n + 1 : n;
+        if (count < 2) {
+            float fade = Math.max(0, trail.get(0).life);
+            fillPaint.setColor(Color.rgb(colorR, colorG, colorB));
             fillPaint.setAlpha((int) (255 * clamp01(fade * 0.85f * opacity)));
-            canvas.drawCircle(xs[0], ys[0], (2.5f + 2 * fade) * density, fillPaint);
+            canvas.drawCircle(trail.get(0).x, trail.get(0).y,
+                    (2.5f + 2 * fade) * density, fillPaint);
             return;
         }
 
+        if (trailPath == null) trailPath = new Path();
+        trailPath.reset();
+        trailPath.moveTo(trail.get(0).x, trail.get(0).y);
+        for (int i = 1; i < n; i++) {
+            trailPath.lineTo(trail.get(i).x, trail.get(i).y);
+        }
+        float headX, headY;
+        if (hasLast) {
+            headX = lastX;
+            headY = lastY;
+            trailPath.lineTo(headX, headY);
+        } else {
+            headX = trail.get(n - 1).x;
+            headY = trail.get(n - 1).y;
+        }
+        float tailX = trail.get(0).x;
+        float tailY = trail.get(0).y;
+
+        // 整条路径只描一次，用渐变代替“逐段不同透明度”，接缝就消失了
         float[] widths = {9f, 6f, 4.5f};
         float[] alphaMul = {0.05f, 0.5f, 1f};
 
+        strokePaint.setStrokeCap(Paint.Cap.ROUND);
+        strokePaint.setStrokeJoin(Paint.Join.ROUND);
+
         for (int pass = 0; pass < 3; pass++) {
-            strokePaint.setStrokeCap(Paint.Cap.ROUND);
-            strokePaint.setStrokeWidth(widths[pass] * density * Math.min(scale, 2f));
-            for (int i = 0; i < n; i++) {
-                float a0 = (i / (float) n) * alphaMul[pass];
-                float a1 = ((i + 1) / (float) n) * alphaMul[pass];
-                float alpha = (a0 + a1) * 0.5f;
-                int base = blend(ls[i]);
-                strokePaint.setColor(base);
-                strokePaint.setAlpha((int) (255 * clamp01(alpha * opacity)));
-                canvas.drawLine(xs[i], ys[i], xs[i + 1], ys[i + 1], strokePaint);
+            int a = (int) (255 * clamp01(alphaMul[pass] * opacity));
+            if (a <= 0) continue;
+            setTrailShader(tailX, tailY, headX, headY,
+                    Color.argb(0, colorR, colorG, colorB),
+                    Color.argb(a, colorR, colorG, colorB));
+            strokePaint.setStrokeWidth(widths[pass] * density);
+            canvas.drawPath(trailPath, strokePaint);
+        }
+
+        if (hdr) {
+            int a = (int) (255 * clamp01(Math.min(1f, 0.45f * hdrGain) * opacity));
+            if (a > 0) {
+                setTrailShader(tailX, tailY, headX, headY,
+                        Color.argb(0, 255, 255, 255),
+                        Color.argb(a, 255, 255, 255));
+                strokePaint.setStrokeWidth(1.8f * density);
+                canvas.drawPath(trailPath, strokePaint);
             }
         }
+        strokePaint.setShader(null);
+    }
+
+    private void setTrailShader(float x0, float y0, float x1, float y1, int c0, int c1) {
+        if (Math.hypot(x1 - x0, y1 - y0) < 1f) {
+            strokePaint.setShader(null);
+            strokePaint.setColor(c1);
+            return;
+        }
+        strokePaint.setShader(new LinearGradient(x0, y0, x1, y1,
+                new int[]{c0, c1}, null, Shader.TileMode.CLAMP));
     }
 
     private void drawWaves(Canvas canvas) {
@@ -406,6 +489,12 @@ public class NativeSparkView extends View {
                 fillPaint.setColor(Color.rgb(colorR, colorG, colorB));
                 fillPaint.setAlpha((int) (255 * clamp01(alphaFill * opacity)));
                 canvas.drawCircle(w.x, w.y, w.r, fillPaint);
+                if (hdr && w.r > 1) {
+                    fillPaint.setColor(Color.WHITE);
+                    float coreA = clamp01(alphaFill * opacity * 0.35f * hdrGain);
+                    fillPaint.setAlpha((int) (255 * coreA));
+                    canvas.drawCircle(w.x, w.y, Math.min(w.r * 0.15f, 14f * density), fillPaint);
+                }
             }
 
             float ringProg = w.ringProg;
@@ -463,7 +552,7 @@ public class NativeSparkView extends View {
 
     private void drawSparks(Canvas canvas) {
         for (Spark s : sparks) {
-            float a = clamp01(s.alpha * opacity);
+            float a = clamp01(s.alpha * opacity * (hdr ? Math.min(1.4f, hdrGain) : 1f));
             if (a <= 0) continue;
 
             canvas.save();

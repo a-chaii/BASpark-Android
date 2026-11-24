@@ -2,6 +2,7 @@ package com.miu.baspark;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.Color;
@@ -82,6 +83,7 @@ public class MainActivity extends Activity {
         buildAppearanceCard(root);
         buildMotionCard(root);
         buildPerformanceCard(root);
+        buildExperimentalCard(root);
         buildFooter(root);
 
         refresh();
@@ -218,11 +220,7 @@ public class MainActivity extends Activity {
         Config.setInt(this, "renderer", value);
         rebuildRendererButtons();
         toast("已切换到" + (value == 1 ? "原生 View" : "WebView") + "，正在重启特效…");
-        if (OverlayService.RUNNING) {
-            stopService(new Intent(this, OverlayService.class));
-            ui.postDelayed(() -> startForegroundService(
-                    new Intent(this, OverlayService.class)), 700);
-        }
+        restartOverlay();
     }
 
     private void buildInputCard(LinearLayout root) {
@@ -406,6 +404,54 @@ public class MainActivity extends Activity {
 
         switchRow(card, "开机自动启动", "开机后自动恢复悬浮层", Config.autoStart(this),
                 b -> Config.setBool(this, "autostart", b != 0));
+    }
+
+    private void buildExperimentalCard(LinearLayout root) {
+        sectionLabel(root, "实验特性");
+        LinearLayout card = card(root, cSurfaceContainer, 24);
+
+        switchRow(card, "HDR 高光", "原生渲染下用 RGBA_F16 窗口 + 叠加混合，屏幕支持时更亮",
+                Config.hdr(this), b -> {
+                    Config.setBool(this, "hdr", b != 0);
+                    restartOverlay();
+                });
+
+        slider(card, "HDR 倍率", 30, 300, (int) (Config.hdrGain(this) * 100), 100, null,
+                p -> {
+                    Config.setFloat(this, "hdr_gain", p / 100f);
+                });
+
+        divider(card);
+
+        switchRow(card, "从最近任务中隐藏", "不再出现在后台卡片列表里",
+                Config.hideRecents(this), b -> {
+                    Config.setBool(this, "hide_recents", b != 0);
+                    applyRecents();
+                });
+
+        TextView note = new TextView(this);
+        note.setText("HDR 只对原生 View 生效；WebView 模式仍然是普通宽色域。");
+        note.setTextSize(11);
+        note.setTextColor(cOnSurfaceVariant);
+        note.setPadding(0, dp(10), 0, 0);
+        card.addView(note);
+    }
+
+    private void restartOverlay() {
+        if (!OverlayService.RUNNING) return;
+        stopService(new Intent(this, OverlayService.class));
+        ui.postDelayed(() -> startForegroundService(new Intent(this, OverlayService.class)), 700);
+    }
+
+    private void applyRecents() {
+        try {
+            ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            if (am == null) return;
+            for (ActivityManager.AppTask t : am.getAppTasks()) {
+                t.setExcludeFromRecents(Config.hideRecents(this));
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     private void buildFooter(LinearLayout root) {
@@ -834,6 +880,7 @@ public class MainActivity extends Activity {
         super.onResume();
         refresh();
         refreshWhitelist();
+        applyRecents();
         polling = true;
         ui.post(new Runnable() {
             @Override
